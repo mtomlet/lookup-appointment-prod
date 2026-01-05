@@ -62,26 +62,56 @@ app.post('/lookup', async (req, res) => {
 
     const authToken = await getToken();
 
-    // Step 1: Find client by phone or email
-    const clientsRes = await axios.get(
-      `${CONFIG.API_URL}/clients?TenantId=${CONFIG.TENANT_ID}&LocationId=${CONFIG.LOCATION_ID}`,
-      { headers: { Authorization: `Bearer ${authToken}` }}
-    );
+    // Step 1: Find client by phone or email with parallel pagination
+    const cleanPhone = phone ? normalizePhone(phone) : null;
+    const cleanEmail = email?.toLowerCase();
+    let foundClient = null;
 
-    const clients = clientsRes.data.data || clientsRes.data;
-    const client = clients.find(c => {
-      if (phone) {
-        const cleanPhone = normalizePhone(phone);
-        const clientPhone = normalizePhone(c.primaryPhoneNumber);
-        return clientPhone === cleanPhone;
-      }
-      if (email) {
-        return c.emailAddress?.toLowerCase() === email.toLowerCase();
-      }
-      return false;
-    });
+    const PAGES_PER_BATCH = 10;
+    const ITEMS_PER_PAGE = 100;
+    const MAX_BATCHES = 5;
 
-    if (!client) {
+    for (let batch = 0; batch < MAX_BATCHES && !foundClient; batch++) {
+      const startPage = batch * PAGES_PER_BATCH + 1;
+      const pagePromises = [];
+
+      for (let i = 0; i < PAGES_PER_BATCH; i++) {
+        const page = startPage + i;
+        pagePromises.push(
+          axios.get(
+            `${CONFIG.API_URL}/clients?TenantId=${CONFIG.TENANT_ID}&LocationId=${CONFIG.LOCATION_ID}&PageNumber=${page}&ItemsPerPage=${ITEMS_PER_PAGE}`,
+            { headers: { Authorization: `Bearer ${authToken}` } }
+          ).catch(() => ({ data: { data: [] } }))
+        );
+      }
+
+      const results = await Promise.all(pagePromises);
+      let emptyPages = 0;
+
+      for (const result of results) {
+        const clients = result.data?.data || [];
+        if (clients.length === 0) emptyPages++;
+
+        for (const c of clients) {
+          if (cleanPhone) {
+            const clientPhone = normalizePhone(c.primaryPhoneNumber);
+            if (clientPhone === cleanPhone) {
+              foundClient = c;
+              break;
+            }
+          }
+          if (cleanEmail && c.emailAddress?.toLowerCase() === cleanEmail) {
+            foundClient = c;
+            break;
+          }
+        }
+        if (foundClient) break;
+      }
+
+      if (emptyPages === PAGES_PER_BATCH) break;
+    }
+
+    if (!foundClient) {
       return res.json({
         success: true,
         found: false,
@@ -90,11 +120,11 @@ app.post('/lookup', async (req, res) => {
       });
     }
 
-    console.log('PRODUCTION Client found:', client.firstName, client.lastName, client.clientId);
+    console.log('PRODUCTION Client found:', foundClient.firstName, foundClient.lastName, foundClient.clientId);
 
     // Step 2: Get client's appointments
     const appointmentsRes = await axios.get(
-      `${CONFIG.API_URL}/book/client/${client.clientId}/services?TenantId=${CONFIG.TENANT_ID}&LocationId=${CONFIG.LOCATION_ID}`,
+      `${CONFIG.API_URL}/book/client/${foundClient.clientId}/services?TenantId=${CONFIG.TENANT_ID}&LocationId=${CONFIG.LOCATION_ID}`,
       { headers: { Authorization: `Bearer ${authToken}` }}
     );
 
@@ -125,8 +155,8 @@ app.post('/lookup', async (req, res) => {
     res.json({
       success: true,
       found: true,
-      client_name: `${client.firstName} ${client.lastName}`,
-      client_id: client.clientId,
+      client_name: `${foundClient.firstName} ${foundClient.lastName}`,
+      client_id: foundClient.clientId,
       appointments: formattedAppointments,
       total: formattedAppointments.length,
       message: `Found ${formattedAppointments.length} upcoming appointment(s)`
