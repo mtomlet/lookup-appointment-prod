@@ -26,6 +26,19 @@ const CONFIG = {
   LOCATION_ID: '201664'  // Phoenix Encanto
 };
 
+// Service ID to human-readable name mapping (Phoenix Encanto)
+const SERVICE_NAMES = {
+  'f9160450-0b51-4ddc-bcc7-ac150103d5c0': 'Haircut Standard',
+  '14000cb7-a5bb-4a26-9f23-b0f3016cc009': 'Haircut Skin Fade',
+  '721e907d-fdae-41a5-bec4-ac150104229b': 'Long Locks',
+  '67c644bc-237f-4794-8b48-ac150106d5ae': 'Wash',
+  '65ee2a0d-e995-4d8d-a286-ac150106994b': 'Grooming'
+};
+
+function getServiceName(serviceId) {
+  return SERVICE_NAMES[serviceId] || serviceId;
+}
+
 let token = null;
 let tokenExpiry = null;
 
@@ -202,12 +215,14 @@ async function getClientAppointments(authToken, clientId, clientName, locationId
       datetime: apt.startTime,
       end_time: apt.servicingEndTime,
       service_id: apt.serviceId,
+      service_name: getServiceName(apt.serviceId),
       stylist_id: apt.employeeId,
       concurrency_check: apt.concurrencyCheckDigits,
       status: apt.isCancelled ? 'cancelled' : 'confirmed',
       client_id: clientId,
       client_name: clientName,
-      add_on_service_ids: addOnResults[index]
+      add_on_service_ids: addOnResults[index],
+      add_on_names: addOnResults[index].map(id => getServiceName(id))
     }));
   } catch (error) {
     console.log(`Error getting appointments for ${clientName}:`, error.message);
