@@ -153,6 +153,23 @@ async function findLinkedProfiles(authToken, guardianId, locationId) {
 }
 
 /**
+ * Get add-on service IDs for a specific appointment
+ * NOTE: /book/client/{id}/services does NOT return addOnServiceIds
+ * Must use /book/service/{appointmentServiceId} to get add-on info
+ */
+async function getAppointmentAddOns(authToken, appointmentServiceId, locationId) {
+  try {
+    const res = await axios.get(
+      `${CONFIG.API_URL}/book/service/${appointmentServiceId}?TenantId=${CONFIG.TENANT_ID}&LocationId=${locationId}`,
+      { headers: { Authorization: `Bearer ${authToken}` }, timeout: 3000 }
+    );
+    return res.data?.data?.addOnServiceIds || [];
+  } catch (error) {
+    return [];
+  }
+}
+
+/**
  * Get appointments for a specific client
  */
 async function getClientAppointments(authToken, clientId, clientName, locationId) {
@@ -168,23 +185,30 @@ async function getClientAppointments(authToken, clientId, clientName, locationId
     const startOfToday = new Date(now);
     startOfToday.setHours(0, 0, 0, 0);
 
-    return allAppointments
-      .filter(apt => {
-        const aptTime = new Date(apt.startTime);
-        return (aptTime > now || aptTime >= startOfToday) && !apt.isCancelled;
-      })
-      .map(apt => ({
-        appointment_id: apt.appointmentId,
-        appointment_service_id: apt.appointmentServiceId,
-        datetime: apt.startTime,
-        end_time: apt.servicingEndTime,
-        service_id: apt.serviceId,
-        stylist_id: apt.employeeId,
-        concurrency_check: apt.concurrencyCheckDigits,
-        status: apt.isCancelled ? 'cancelled' : 'confirmed',
-        client_id: clientId,
-        client_name: clientName
-      }));
+    const upcomingAppointments = allAppointments.filter(apt => {
+      const aptTime = new Date(apt.startTime);
+      return (aptTime > now || aptTime >= startOfToday) && !apt.isCancelled;
+    });
+
+    // Fetch add-ons for each appointment in parallel
+    const addOnPromises = upcomingAppointments.map(apt =>
+      getAppointmentAddOns(authToken, apt.appointmentServiceId, locationId)
+    );
+    const addOnResults = await Promise.all(addOnPromises);
+
+    return upcomingAppointments.map((apt, index) => ({
+      appointment_id: apt.appointmentId,
+      appointment_service_id: apt.appointmentServiceId,
+      datetime: apt.startTime,
+      end_time: apt.servicingEndTime,
+      service_id: apt.serviceId,
+      stylist_id: apt.employeeId,
+      concurrency_check: apt.concurrencyCheckDigits,
+      status: apt.isCancelled ? 'cancelled' : 'confirmed',
+      client_id: clientId,
+      client_name: clientName,
+      add_on_service_ids: addOnResults[index]
+    }));
   } catch (error) {
     console.log(`Error getting appointments for ${clientName}:`, error.message);
     return [];
